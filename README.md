@@ -70,21 +70,25 @@ PYTHONPATH=python python bench/bench.py
 
 ## Performance
 
-Best-of-N wall clock, one process, on a shared 36-core box. The reference is
-CPython's `difflib` -- the pure-Python form of exactly this work, not a
-strawman. Every case verifies the two agree on the result before it times
-anything, so a kernel that got faster by being wrong fails the run.
+Best-of-N wall clock, one process, on a shared 72-thread box (Intel Xeon
+E5-2697 v4, 2x18 cores; see `bench/verify.md` for the session this table
+was last measured in). The reference is CPython's `difflib` -- the
+pure-Python form of exactly this work, not a strawman. Every case verifies
+the two agree on the result before it times anything, so a kernel that got
+faster by being wrong fails the run. Each row constructs a fresh
+`SequenceMatcher` per repetition on both sides, so construct cost is inside
+every number below.
 
 | case | difflib | mojo-difflib-ng | result |
 | --- | ---: | ---: | ---: |
-| get_matching_blocks, 10867 chars, 40 edits, 158 blocks | 1618.85 ms | 40.63 ms | **39.85x faster** |
-| all three ratios, 20000 chars | 15.01 ms | 8.80 ms | 1.71x faster |
-| find_longest_match, 20000 chars | 25.64 ms | 19.68 ms | 1.30x faster |
-| get_close_matches, 2000 candidates x 40 chars, 8 threads | 47.90 ms | 40.19 ms | 1.19x faster |
-| get_matching_blocks, 2000 unrelated chars | 1.27 ms | 1.59 ms | **0.80x, a loss** |
-| b2j index build, 21797 chars | 5.05 ms | 21.25 ms | **0.24x, a loss** |
+| get_matching_blocks, 10867 chars, 40 edits, 171 blocks | 645.15 ms | 19.63 ms | **32.87x faster** |
+| all three ratios, 20000 chars | 7.76 ms | 4.30 ms | 1.81x faster |
+| get_close_matches, 2000 candidates x 40 chars, 8 threads | 30.21 ms | 19.38 ms | 1.56x faster |
+| get_matching_blocks, 2000 unrelated chars | 0.64 ms | 1.05 ms | **0.61x, a loss** |
+| find_longest_match, 20000 chars | 8.40 ms | 10.08 ms | **0.83x, a loss** |
+| b2j index build, 21797 chars | 2.80 ms | 11.88 ms | **0.24x, a loss** |
 
-The two losses are real and worth being precise about.
+Three rows in this table are losses, and they are worth being precise about.
 
 `get_matching_blocks` is where the port earns its keep: difflib's inner loop
 is a Python dict rebuilt on every position, and the compiled version does the
@@ -104,8 +108,18 @@ The 2000-unrelated-chars case is a small-input loss, where per-call overhead
 (scratch allocation, the ctypes boundary, index construction) is the whole
 cost and the scan itself is a couple of milliseconds.
 
-The box is shared, so the sub-20 ms rows move by a factor of two between runs;
-the 1.6 s row does not.
+The **find_longest_match row is a loss in bench form**: each repetition
+constructs a fresh matcher, so the Mojo side's ~10 ms of construct cost
+(`_encode_general` over both sequences plus the b2j build) is inside the
+number while the compiled scan itself is ~0.1 ms. The reference pays only
+~2 ms of construct cost. Call `find_longest_match` on an already-built
+matcher and the port is ~50x faster on this input (0.12 ms vs ~6 ms,
+measured in this session's splits); what the table shows is that the port
+loses whenever construction is per-call, which is exactly the construct
+cost the b2j row isolates.
+
+The box is shared, so the sub-20 ms rows move noticeably between runs; the
+~0.6 s `get_matching_blocks` row does not.
 
 ## How it works
 
