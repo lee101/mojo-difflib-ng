@@ -254,6 +254,47 @@ class SequenceMatcher:
             self._rescratch()
         return self._scratch
 
+    def _find_longest_match_py(self, alo, ahi, blo, bhi):
+        """Exact Python find_longest_match for out-of-bounds windows.
+
+        Mirrors difflib SequenceMatcher.find_longest_match statement for
+        statement -- including its negative-index wrap and its IndexError
+        when an extension pass indexes past b -- over the same b2j index
+        the kernel uses (junk and popular elements already purged, junk
+        flagged per position). Only the scan/index of elements is done in
+        Python; the index itself comes from the Mojo counting sort.
+        """
+        a, b = self.a, self.b
+        b2j = self._b2j_dict()
+        # bjunk membership must be by element, as in difflib; b2j purged
+        # junk by element, so rebuild the junk element set from the flags.
+        bjunk = {b[i] for i, f in enumerate(self._bjunk.tolist()) if f}
+        isbjunk = bjunk.__contains__
+        besti, bestj, bestsize = alo, blo, 0
+        j2len: dict = {}
+        nothing: list = []
+        for i in range(alo, ahi):
+            j2lenget = j2len.get
+            newj2len: dict = {}
+            for j in b2j.get(a[i], nothing):
+                if j < blo:
+                    continue
+                if j >= bhi:
+                    break
+                k = newj2len[j] = j2lenget(j - 1, 0) + 1
+                if k > bestsize:
+                    besti, bestj, bestsize = i - k + 1, j - k + 1, k
+            j2len = newj2len
+        while besti > alo and bestj > blo and not isbjunk(b[bestj - 1]) and a[besti - 1] == b[bestj - 1]:
+            besti, bestj, bestsize = besti - 1, bestj - 1, bestsize + 1
+        while besti + bestsize < ahi and bestj + bestsize < bhi and not isbjunk(b[bestj + bestsize]) and a[besti + bestsize] == b[bestj + bestsize]:
+            bestsize += 1
+        while besti > alo and bestj > blo and isbjunk(b[bestj - 1]) and a[besti - 1] == b[bestj - 1]:
+            besti, bestj, bestsize = besti - 1, bestj - 1, bestsize + 1
+        while besti + bestsize < ahi and bestj + bestsize < bhi and isbjunk(b[bestj + bestsize]) and a[besti + bestsize] == b[bestj + bestsize]:
+            bestsize = bestsize + 1
+        return Match(besti, bestj, bestsize)
+
     # -- matching ---------------------------------------------------------
 
     def find_longest_match(
@@ -267,6 +308,18 @@ class SequenceMatcher:
             ahi = len(a)
         if bhi is None:
             bhi = len(b)
+        # Windows that stay inside both sequences take the compiled
+        # kernel. Anything else -- out-of-range, negative (Python wraps
+        # negative indices in difflib's direct a[i]/b[j] reads), or an
+        # empty/reversed range whose best match would index past b in
+        # the junk/popular extension -- takes an exact Python fallback
+        # below. The kernel reads raw code arrays and would walk off
+        # them; the fallback reproduces difflib's IndexError/return
+        # behaviour bit for bit, including the negative-index wrap.
+        # Matches difflib SequenceMatcher.find_longest_match.
+        _na, _nb = len(a), len(b)
+        if not (0 <= alo <= ahi <= _na and 0 <= blo <= bhi <= _nb):
+            return self._find_longest_match_py(alo, ahi, blo, bhi)
         sc = self._sc()
         sc.res[0] = alo
         sc.res[1] = blo

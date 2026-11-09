@@ -296,7 +296,13 @@ def dn_find_longest_match(
     var jgen = ip(jgen_addr)
     var kbuf = ip(kbuf_addr)
     var res = ip(res_addr)
-    reset_j2(j2, jgen, bhi if bhi > blo else blo)
+    # Matches difflib find_longest_match: j2len is only ever indexed at
+    # positions inside b, so the stamp reset is bounded by the array
+    # size even when the window's bhi runs past the end of b.
+    var reset_n: Int = bhi if bhi > blo else blo
+    if reset_n < 0:
+        reset_n = 0
+    reset_j2(j2, jgen, reset_n)
     flm(
         a, 0, b, start, items, bjunk, j2, jgen, kbuf, nbuckets, 0, alo, ahi,
         blo, bhi, res,
